@@ -355,11 +355,11 @@ build_topology_summary() {
 
   sudo nmap -sn "$net" > "$tmp_file" 2>/dev/null || true
 
-  total="$(grep -c '^Nmap scan report for ' "$tmp_file" || true)"
-  apple="$(grep -Ei 'MAC Address: .*\(.*Apple' "$tmp_file" | wc -l | tr -d ' ')"
-  printers="$(grep -Ei 'MAC Address: .*\(.*(HP|Brother|Canon|Epson|Xerox|Lexmark)' "$tmp_file" | wc -l | tr -d ' ')"
-  routers="$(grep -Ei 'MAC Address: .*\(.*(Ubiquiti|Cisco|MikroTik|Netgear|TP-Link|ASUS|Juniper)' "$tmp_file" | wc -l | tr -d ' ')"
-  unknown="$(grep -Ei 'MAC Address: .*\(Unknown\)' "$tmp_file" | wc -l | tr -d ' ')"
+  total="$(grep -c '^Nmap scan report for ' "$tmp_file" 2>/dev/null || true)"
+  apple="$(grep -Ei 'MAC Address: .*\(.*Apple' "$tmp_file" 2>/dev/null | wc -l | tr -d ' ' || true)"
+  printers="$(grep -Ei 'MAC Address: .*\(.*(HP|Brother|Canon|Epson|Xerox|Lexmark)' "$tmp_file" 2>/dev/null | wc -l | tr -d ' ' || true)"
+  routers="$(grep -Ei 'MAC Address: .*\(.*(Ubiquiti|Cisco|MikroTik|Netgear|TP-Link|ASUS|Juniper)' "$tmp_file" 2>/dev/null | wc -l | tr -d ' ' || true)"
+  unknown="$(grep -Ei 'MAC Address: .*\(Unknown\)' "$tmp_file" 2>/dev/null | wc -l | tr -d ' ' || true)"
 
   echo | tee -a "$LOGFILE"
   echo "Network Summary" | tee -a "$LOGFILE"
