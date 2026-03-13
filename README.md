@@ -4,7 +4,7 @@
 
 Clone the repository and run the tool directly:
 
-git clone https://github.com/korshakov/lss-macos-network-tools.git
+'git clone https://github.com/korshakov/lss-macos-network-tools.git'
 
 cd lss-macos-network-tools
 
