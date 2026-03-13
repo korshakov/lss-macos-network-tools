@@ -387,7 +387,6 @@ export_report() {
     echo "LSS NetInfo Report"
     echo "Generated: $generated"
     echo "Interface: $IF"
-    echo "Gateway: $gateway"
     echo "-----------------------------------"
     cat "$LOGFILE"
   } > "$dest"
