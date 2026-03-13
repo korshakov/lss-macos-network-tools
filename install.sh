@@ -1,12 +1,20 @@
 #!/bin/bash
+set -e
+set -o pipefail
 
-echo "Installing LSS NetInfo..."
+SCRIPT_NAME="lss-macos-network-tools"
+TARGET_ALIAS="/usr/local/bin/lss"
+TARGET_FULL="/usr/local/bin/lss-macos-network-tools"
 
-chmod +x lss-netinfo
+if [[ ! -f "$SCRIPT_NAME" ]]; then
+  echo "Error: $SCRIPT_NAME not found in current directory."
+  exit 1
+fi
 
-sudo cp lss-netinfo /usr/local/bin/lss
+chmod +x "$SCRIPT_NAME"
+sudo cp "$SCRIPT_NAME" "$TARGET_ALIAS"
+sudo cp "$SCRIPT_NAME" "$TARGET_FULL"
+sudo chmod +x "$TARGET_ALIAS" "$TARGET_FULL"
 
 echo "Installation complete."
-echo "Run tool with:"
-echo ""
-echo "lss"
+echo "Run the tool with: lss"

@@ -1,0 +1,447 @@
+#!/bin/bash
+set -e
+set -o pipefail
+
+VERSION="1.0.0"
+REPO="korshakov/lss-macos-network-tools"
+
+if [[ "${1:-}" == "--version" ]]; then
+  echo "LSS macOS Network Tools v${VERSION}"
+  exit 0
+fi
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+LOGFILE="/tmp/lss-netinfo-session.log"
+> "$LOGFILE"
+
+check_dependency() {
+  local dep="$1"
+  if command -v "$dep" >/dev/null 2>&1; then
+    printf "%-15s ${GREEN}PASS${NC}\n" "${dep}:"
+    return 0
+  fi
+
+  printf "%-15s ${RED}FAIL${NC}\n" "${dep}:"
+  return 1
+}
+
+install_homebrew() {
+  echo "Homebrew is required and missing."
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+}
+
+run_dependency_check() {
+  local missing_deps=()
+
+  echo ""
+  echo "Dependency Check"
+  echo "----------------"
+
+  for dep in brew nmap arp-scan speedtest-cli; do
+    if ! check_dependency "$dep"; then
+      missing_deps+=("$dep")
+    fi
+  done
+
+  if [[ ${#missing_deps[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  echo ""
+  read -r -p "Install missing dependencies? (y/n) " ans
+  if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
+    echo "Missing dependencies were not installed. Exiting."
+    exit 1
+  fi
+
+  for dep in "${missing_deps[@]}"; do
+    if [[ "$dep" == "brew" ]]; then
+      install_homebrew
+    else
+      brew install "$dep"
+    fi
+  done
+
+  echo ""
+  echo "Dependency Check"
+  echo "----------------"
+  for dep in brew nmap arp-scan speedtest-cli; do
+    check_dependency "$dep"
+  done
+}
+
+version_is_newer() {
+  local latest="$1"
+  local current="$2"
+  local latest_major latest_minor latest_patch
+  local current_major current_minor current_patch
+
+  IFS='.' read -r latest_major latest_minor latest_patch <<< "$latest"
+  IFS='.' read -r current_major current_minor current_patch <<< "$current"
+
+  latest_major=${latest_major:-0}
+  latest_minor=${latest_minor:-0}
+  latest_patch=${latest_patch:-0}
+  current_major=${current_major:-0}
+  current_minor=${current_minor:-0}
+  current_patch=${current_patch:-0}
+
+  if (( latest_major > current_major )); then
+    return 0
+  elif (( latest_major < current_major )); then
+    return 1
+  fi
+
+  if (( latest_minor > current_minor )); then
+    return 0
+  elif (( latest_minor < current_minor )); then
+    return 1
+  fi
+
+  if (( latest_patch > current_patch )); then
+    return 0
+  fi
+
+  return 1
+}
+
+check_for_updates() {
+  local latest_tag latest_version response update_url tmp_dir extracted_dir updated=0
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo -e "${YELLOW}Update check skipped: curl is not available.${NC}"
+    return 0
+  fi
+
+  response="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null || true)"
+  latest_tag="$(printf '%s\n' "$response" | awk -F '"' '/"tag_name"/ {print $4; exit}')"
+
+  if [[ -z "$latest_tag" ]]; then
+    return 0
+  fi
+
+  latest_version="${latest_tag#v}"
+
+  if ! version_is_newer "$latest_version" "$VERSION"; then
+    return 0
+  fi
+
+  echo ""
+  echo "Update available: v${latest_version}"
+  echo "Current version: v${VERSION}"
+  echo ""
+  read -r -p "Install update now? (y/n) " answer
+
+  if [[ "$answer" != "y" && "$answer" != "Y" ]]; then
+    return 0
+  fi
+
+  update_url="https://github.com/${REPO}/archive/refs/tags/v${latest_version}.tar.gz"
+  tmp_dir="$(mktemp -d /tmp/lss-update.XXXXXX)"
+  trap 'rm -rf "$tmp_dir"' RETURN
+
+  curl -fsSL "$update_url" -o "$tmp_dir/update.tar.gz"
+  tar -xzf "$tmp_dir/update.tar.gz" -C "$tmp_dir"
+  extracted_dir="$tmp_dir/lss-macos-network-tools-${latest_version}"
+
+  if [[ ! -f "$extracted_dir/lss-macos-network-tools" ]]; then
+    echo "Update package is invalid."
+    return 1
+  fi
+
+  if [[ -f "/usr/local/bin/lss" ]]; then
+    sudo cp "$extracted_dir/lss-macos-network-tools" /usr/local/bin/lss
+    sudo chmod +x /usr/local/bin/lss
+    updated=1
+  fi
+
+  if [[ -f "/usr/local/bin/lss-macos-network-tools" ]]; then
+    sudo cp "$extracted_dir/lss-macos-network-tools" /usr/local/bin/lss-macos-network-tools
+    sudo chmod +x /usr/local/bin/lss-macos-network-tools
+    updated=1
+  fi
+
+  if [[ "$0" == *"lss-macos-network-tools" ]] && [[ -w "$0" ]]; then
+    cp "$extracted_dir/lss-macos-network-tools" "$0"
+    chmod +x "$0"
+    updated=1
+  fi
+
+  if [[ $updated -eq 0 ]]; then
+    echo "No supported installation path found for auto-update."
+    return 1
+  fi
+
+  echo "Update installed successfully."
+  echo "Restarting tool..."
+  exec "$0"
+}
+
+get_interfaces() {
+  networksetup -listallhardwareports | awk '
+    BEGIN { IGNORECASE=1 }
+    /^Hardware Port:/ { port=substr($0, index($0, ":") + 2) }
+    /^Device:/ {
+      device=$2
+      if (
+        port ~ /Bluetooth PAN/ ||
+        port ~ /Thunderbolt Bridge/ ||
+        port ~ /Bridge/ ||
+        port ~ /AWDL/ ||
+        port ~ /P2P/
+      ) {
+        next
+      }
+      print port "|" device
+    }
+  '
+}
+
+select_interface() {
+  while true; do
+    echo ""
+    echo "================================="
+    echo " Select Network Interface"
+    echo "================================="
+    echo ""
+
+    mapfile -t interfaces < <(get_interfaces)
+
+    if [[ ${#interfaces[@]} -eq 0 ]]; then
+      echo "No usable network interfaces found."
+      exit 1
+    fi
+
+    local i=1
+    for iface in "${interfaces[@]}"; do
+      local port dev
+      port="$(echo "$iface" | cut -d'|' -f1)"
+      dev="$(echo "$iface" | cut -d'|' -f2)"
+      echo "$i) $port ($dev)"
+      ((i++))
+    done
+
+    echo ""
+    echo "0) Exit"
+    echo ""
+
+    read -r -p "Select interface: " choice
+
+    if [[ "$choice" == "0" ]]; then
+      exit 0
+    fi
+
+    IF="$(echo "${interfaces[$((choice - 1))]:-}" | cut -d'|' -f2)"
+
+    if [[ -n "$IF" ]]; then
+      echo ""
+      echo "Selected interface: $IF"
+      echo ""
+      break
+    fi
+
+    echo "Invalid option"
+  done
+}
+
+get_gateway() {
+  ipconfig getpacket "$IF" | awk -F"[{}]" '/router/ {print $2}'
+}
+
+get_network() {
+  ipconfig getifaddr "$IF" | awk -F. '{print $1"."$2"."$3".0/24"}'
+}
+
+interface_info() {
+  printf "\nInterface: %s\nIP: %s\nSubnet: %s\nGateway: %s\nDNS: %s\nDHCP: %s\n\n" \
+    "$IF" \
+    "$(ipconfig getifaddr "$IF")" \
+    "$(ipconfig getoption "$IF" subnet_mask)" \
+    "$(get_gateway)" \
+    "$(ipconfig getpacket "$IF" | awk -F"[{}]" '/domain_name_server/ {print $2}')" \
+    "$(ipconfig getoption "$IF" server_identifier)" | tee -a "$LOGFILE"
+}
+
+discover_devices() {
+  echo "" | tee -a "$LOGFILE"
+  echo "Discovering devices..." | tee -a "$LOGFILE"
+  echo "" | tee -a "$LOGFILE"
+
+  sudo arp-scan --interface="$IF" --localnet | tee -a "$LOGFILE"
+}
+
+gateway_ports() {
+  local gw
+  gw="$(get_gateway)"
+
+  echo "" | tee -a "$LOGFILE"
+  echo "Gateway: $gw" | tee -a "$LOGFILE"
+  echo "" | tee -a "$LOGFILE"
+
+  sudo nmap -Pn -T4 --open "$gw" | tee -a "$LOGFILE"
+}
+
+gateway_fingerprint() {
+  local gw
+  gw="$(get_gateway)"
+
+  echo "" | tee -a "$LOGFILE"
+  echo "Gateway: $gw" | tee -a "$LOGFILE"
+  echo "" | tee -a "$LOGFILE"
+
+  sudo nmap -Pn -A -T4 --top-ports 100 "$gw" | tee -a "$LOGFILE"
+}
+
+rogue_dhcp() {
+  echo "" | tee -a "$LOGFILE"
+  echo "Scanning for rogue DHCP servers..." | tee -a "$LOGFILE"
+  echo "" | tee -a "$LOGFILE"
+
+  sudo nmap --script broadcast-dhcp-discover -e "$IF" 2>/dev/null | tee -a "$LOGFILE"
+}
+
+network_map() {
+  local net
+  net="$(get_network)"
+
+  echo "" | tee -a "$LOGFILE"
+  echo "Network: $net" | tee -a "$LOGFILE"
+  echo "" | tee -a "$LOGFILE"
+
+  sudo nmap -sn -O -sV "$net" | tee -a "$LOGFILE"
+}
+
+find_web_interfaces() {
+  local net
+  net="$(get_network)"
+
+  echo "" | tee -a "$LOGFILE"
+  echo "Scanning for web admin interfaces..." | tee -a "$LOGFILE"
+  echo "" | tee -a "$LOGFILE"
+
+  sudo nmap -p 80,443,8080,8443 --open "$net" | tee -a "$LOGFILE"
+}
+
+find_remote_access() {
+  local net
+  net="$(get_network)"
+
+  echo "" | tee -a "$LOGFILE"
+  echo "Scanning for remote access services..." | tee -a "$LOGFILE"
+  echo "" | tee -a "$LOGFILE"
+
+  sudo nmap -p 22,3389,5900 --open "$net" | tee -a "$LOGFILE"
+}
+
+gateway_health() {
+  local gw
+  gw="$(get_gateway)"
+
+  echo "" | tee -a "$LOGFILE"
+  echo "Testing gateway health..." | tee -a "$LOGFILE"
+  echo "" | tee -a "$LOGFILE"
+
+  ping -c 10 "$gw" | tee -a "$LOGFILE"
+}
+
+speed_test() {
+  echo "" | tee -a "$LOGFILE"
+  echo "Running internet speed test..." | tee -a "$LOGFILE"
+  echo "" | tee -a "$LOGFILE"
+
+  speedtest-cli | tee -a "$LOGFILE"
+}
+
+quick_audit() {
+  echo "" | tee -a "$LOGFILE"
+  echo "=================================" | tee -a "$LOGFILE"
+  echo " LSS NETWORK QUICK AUDIT" | tee -a "$LOGFILE"
+  echo "=================================" | tee -a "$LOGFILE"
+
+  interface_info
+  gateway_ports
+  gateway_fingerprint
+  discover_devices
+  rogue_dhcp
+}
+
+export_report() {
+  local date_stamp dest generated gateway
+  date_stamp="$(date "+%Y-%m-%d_%H-%M-%S")"
+  generated="$(date "+%Y-%m-%d %H:%M")"
+  gateway="$(get_gateway)"
+  dest="$HOME/Desktop/LSS-NetInfo-Export-$date_stamp.txt"
+
+  {
+    echo "LSS NetInfo Report"
+    echo "Generated: $generated"
+    echo "Interface: $IF"
+    echo "Gateway: $gateway"
+    echo "------------------------------------"
+    cat "$LOGFILE"
+  } > "$dest"
+
+  echo ""
+  echo "Export saved to:"
+  echo "$dest"
+  echo ""
+}
+
+show_menu() {
+  echo ""
+  echo "================================="
+  echo "    LSS macOS Network Tools"
+  echo "================================="
+  echo ""
+  echo "1) Interface Network Info"
+  echo "2) Discover Devices"
+  echo "3) Gateway Port Scan"
+  echo "4) Gateway Fingerprint"
+  echo "5) Rogue DHCP Detection"
+  echo "6) Network Map"
+  echo "7) Find Web Admin Interfaces"
+  echo "8) Find Remote Access Services"
+  echo "9) Gateway Health Test"
+  echo "10) Internet Speed Test"
+  echo "11) Quick Network Audit"
+  echo ""
+  echo "0) Exit"
+  echo ""
+
+  read -r -p "Select option: " opt
+
+  case "$opt" in
+    1) interface_info ;;
+    2) discover_devices ;;
+    3) gateway_ports ;;
+    4) gateway_fingerprint ;;
+    5) rogue_dhcp ;;
+    6) network_map ;;
+    7) find_web_interfaces ;;
+    8) find_remote_access ;;
+    9) gateway_health ;;
+    10) speed_test ;;
+    11) quick_audit ;;
+    0)
+      read -r -p "Export session report to Desktop? (y/n): " exp
+      if [[ "$exp" == "y" || "$exp" == "Y" ]]; then
+        export_report
+      fi
+      exit 0
+      ;;
+    *) echo "Invalid option" ;;
+  esac
+}
+
+run_dependency_check
+check_for_updates
+sudo -v
+select_interface
+
+while true; do
+  show_menu
+done
