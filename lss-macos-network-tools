@@ -660,6 +660,58 @@ scan_dns_servers() {
   done <<< "$discovered_hosts"
 }
 
+scan_printers() {
+  local net scan_output line current_ip port service found
+  net="$(get_network)"
+
+  echo
+  echo "Scanning network for printers..."
+  scan_output="$(nmap -p 80,443,515,631,9100 --open "$net" 2>/dev/null || true)"
+
+  found=0
+  current_ip=""
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^Nmap\ scan\ report\ for\  ]]; then
+      current_ip="$(echo "$line" | awk '{print $NF}')"
+      continue
+    fi
+
+    if [[ "$line" =~ ^([0-9]+)/tcp[[:space:]]+open ]]; then
+      port="${BASH_REMATCH[1]}"
+
+      case "$port" in
+        80) service="Printer Web Interface" ;;
+        443) service="Secure Printer Interface" ;;
+        515) service="LPD Printer Service" ;;
+        631) service="IPP Printer Service" ;;
+        9100) service="JetDirect Printer Port" ;;
+        *) continue ;;
+      esac
+
+      if [[ -n "$current_ip" ]]; then
+        if [[ "$found" -eq 0 ]]; then
+          echo
+          echo "## Printers Discovered"
+          echo
+        fi
+
+        echo "IP: $current_ip"
+        echo "Port: $port"
+        echo "Service: $service"
+        echo
+        echo "---"
+        echo
+        found=1
+      fi
+    fi
+  done <<< "$scan_output"
+
+  if [[ "$found" -eq 0 ]]; then
+    echo "No printers discovered on the network."
+  fi
+}
+
 exit_script() {
   echo
   read -r -p "Export session report to Desktop? (y/n) " exp
@@ -706,6 +758,7 @@ echo "3) Rogue DHCP Detection"
 echo "4) Find Web Admin Interfaces"
 echo "5) Internet Speed Test"
 echo "6) Scan for DNS servers"
+echo "8) Scan for Printers"
 
 echo
 echo "0) Exit"
@@ -731,6 +784,7 @@ main() {
       4) find_web_interfaces ;;
       5) speed_test ;;
       6) scan_dns_servers ;;
+      8) scan_printers ;;
       0) exit_script ;;
       *) print_warn "Invalid option." ;;
     esac
