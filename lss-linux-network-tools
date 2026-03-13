@@ -47,6 +47,16 @@ log_echo() {
   echo "$*" | tee -a "$LOGFILE"
 }
 
+print_none_if_empty() {
+  local value="$1"
+
+  if [ -z "$value" ]; then
+    log_echo "None discovered on the network."
+  else
+    log_echo "$value"
+  fi
+}
+
 spinner() {
   local pid=$1
   local delay=0.1
@@ -650,10 +660,8 @@ scan_dns_servers() {
   log_echo "## DNS Servers Discovered"
   log_echo ""
 
-  if [[ -z "$discovered_services" ]]; then
-    log_echo "None discovered on the network."
-    return
-  fi
+  print_none_if_empty "$discovered_services"
+  [[ -z "$discovered_services" ]] && return
 
   while IFS='|' read -r ip port; do
     [[ -z "$ip" || -z "$port" ]] && continue
@@ -752,10 +760,8 @@ scan_file_servers() {
   log_echo "## File Servers Discovered"
   log_echo ""
 
-  if [[ -z "$parsed_results" ]]; then
-    log_echo "None discovered on the network."
-    return
-  fi
+  print_none_if_empty "$parsed_results"
+  [[ -z "$parsed_results" ]] && return
 
   while IFS='|' read -r ip port; do
     local service_name
