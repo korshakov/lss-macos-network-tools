@@ -515,47 +515,40 @@ speed_test() {
 }
 
 build_topology_summary() {
-  local net tmp_file profile_file total routers access_points printers nas servers workstations iot unknown
-  net="$(get_network)"
+  local net tmp_file total apple printers routers unknown
+
+  net=$(get_network)
+
   tmp_file=$(mktemp -t lss-topology)
-  profile_file="$(mktemp /tmp/lss-profiles.XXXXXX)"
 
-  echo "---" | tee -a "$LOGFILE"
-  print_info "## Running scan..." | tee -a "$LOGFILE"
-  print_info "Running topology discovery scan on $net" | tee -a "$LOGFILE"
-  sudo nmap -sn "$net" > "$tmp_file" 2>/dev/null || true
-  echo "---" | tee -a "$LOGFILE"
-  print_info "## Scan complete" | tee -a "$LOGFILE"
+  echo
+  echo "Running topology discovery..."
+  echo
 
-  build_device_profiles "$tmp_file" "$profile_file"
+  sudo nmap -sn "$net" > "$tmp_file"
 
-  total="$(wc -l < "$profile_file" | tr -d ' ')"
-  routers="$(awk -F'|' '$6=="Router" {c++} END{print c+0}' "$profile_file")"
-  access_points="$(awk -F'|' '$6=="Access Point" {c++} END{print c+0}' "$profile_file")"
-  printers="$(awk -F'|' '$6=="Printer" {c++} END{print c+0}' "$profile_file")"
-  nas="$(awk -F'|' '$6=="NAS" {c++} END{print c+0}' "$profile_file")"
-  servers="$(awk -F'|' '$6=="Server" {c++} END{print c+0}' "$profile_file")"
-  workstations="$(awk -F'|' '$6=="Workstation" {c++} END{print c+0}' "$profile_file")"
-  iot="$(awk -F'|' '$6=="IoT Device" {c++} END{print c+0}' "$profile_file")"
-  unknown="$(awk -F'|' '$6=="Unknown" {c++} END{print c+0}' "$profile_file")"
+  total=$(grep -c "Nmap scan report for" "$tmp_file")
 
-  echo | tee -a "$LOGFILE"
-  echo "Network Summary" | tee -a "$LOGFILE"
-  echo "----------------" | tee -a "$LOGFILE"
-  echo "Gateway: $(get_gateway)" | tee -a "$LOGFILE"
-  echo "Devices detected: ${total:-0}" | tee -a "$LOGFILE"
-  echo | tee -a "$LOGFILE"
-  echo "Device Classification Breakdown:" | tee -a "$LOGFILE"
-  echo "Routers: ${routers:-0}" | tee -a "$LOGFILE"
-  echo "Access Points: ${access_points:-0}" | tee -a "$LOGFILE"
-  echo "Printers: ${printers:-0}" | tee -a "$LOGFILE"
-  echo "NAS: ${nas:-0}" | tee -a "$LOGFILE"
-  echo "Servers: ${servers:-0}" | tee -a "$LOGFILE"
-  echo "Workstations: ${workstations:-0}" | tee -a "$LOGFILE"
-  echo "IoT Devices: ${iot:-0}" | tee -a "$LOGFILE"
-  echo "Unknown devices: ${unknown:-0}" | tee -a "$LOGFILE"
+  apple=$(grep -Ei "Apple" "$tmp_file" | wc -l | tr -d ' ')
+  printers=$(grep -Ei "HP|Brother|Canon|Epson|Xerox|Lexmark" "$tmp_file" | wc -l | tr -d ' ')
+  routers=$(grep -Ei "Ubiquiti|Cisco|MikroTik|Netgear|TP-Link|ASUS|Juniper" "$tmp_file" | wc -l | tr -d ' ')
+  unknown=$(grep -Ei "Unknown" "$tmp_file" | wc -l | tr -d ' ')
 
-  rm -f "$tmp_file" "$profile_file"
+  echo
+  echo "Network Summary"
+  echo "----------------"
+
+  echo "Gateway: $(get_gateway)"
+  echo "Devices detected: ${total:-0}"
+
+  echo
+  echo "Breakdown:"
+  echo "Apple devices: ${apple:-0}"
+  echo "Printers: ${printers:-0}"
+  echo "Routers: ${routers:-0}"
+  echo "Unknown devices: ${unknown:-0}"
+
+  rm -f "$tmp_file"
 }
 
 network_health_summary() {
@@ -672,16 +665,15 @@ show_menu() {
   echo "    LSS macOS Network Tools"
   echo "================================="
   echo "1) Interface Network Info"
-  echo "3) Gateway Port Scan"
-  echo "4) Gateway Fingerprint"
-  echo "5) Rogue DHCP Detection"
-  echo "6) Network Map"
-  echo "7) Find Web Admin Interfaces"
-  echo "8) Find Remote Access Services"
-  echo "9) Internet Speed Test"
-  echo "10) Network Topology Summary"
-  echo "11) Network Health Summary"
-  echo "12) Exit"
+  echo "2) Gateway Port Scan"
+  echo "3) Gateway Fingerprint"
+  echo "4) Rogue DHCP Detection"
+  echo "5) Network Map"
+  echo "6) Find Web Admin Interfaces"
+  echo "7) Find Remote Access Services"
+  echo "8) Internet Speed Test"
+  echo "9) Network Topology Summary"
+  echo "10) Network Health Summary"
   echo
   echo "0) Exit"
   echo
@@ -700,24 +692,16 @@ main() {
 
     case "$opt" in
       1) interface_info ;;
-      3) gateway_ports ;;
-      4) gateway_fingerprint ;;
-      5) rogue_dhcp ;;
-      6) network_map ;;
-      7) find_web_interfaces ;;
-      8) find_remote_access ;;
-      9) speed_test ;;
-      10) build_topology_summary ;;
-      11) network_health_summary ;;
-      0)
-        echo
-        read -r -p "Export session report to Desktop? (y/n) " exp
-        if [[ "$exp" == "y" || "$exp" == "Y" ]]; then
-          export_report
-        fi
-        exit 0
-        ;;
-      12) exit 0 ;;
+      2) gateway_ports ;;
+      3) gateway_fingerprint ;;
+      4) rogue_dhcp ;;
+      5) network_map ;;
+      6) find_web_interfaces ;;
+      7) find_remote_access ;;
+      8) speed_test ;;
+      9) build_topology_summary ;;
+      10) network_health_summary ;;
+      11) exit 0 ;;
       *) print_warn "Invalid option." ;;
     esac
   done
