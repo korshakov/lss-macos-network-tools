@@ -3,7 +3,7 @@ set -e
 set -o pipefail
 
 MAIN="/usr/local/bin/lss-macos-network-tools"
-ALIAS="/usr/local/bin/lss"
+ALIAS="/usr/local/bin/lss-network-tools"
 
 if [[ -f "$MAIN" ]]; then
   sudo rm "$MAIN"
