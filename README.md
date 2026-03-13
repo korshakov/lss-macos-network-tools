@@ -8,7 +8,7 @@ Clone the repository and run the installer:
 git clone https://github.com/korshakov/lss-network-tools.git
 cd lss-network-tools
 chmod +x install.sh
-./install.sh
+chmod +x *.sh
 ```
 
 On first launch the tool will automatically:
