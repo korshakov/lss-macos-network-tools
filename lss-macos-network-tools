@@ -474,27 +474,28 @@ interface_info() {
   } | tee -a "$LOGFILE"
 }
 
-gateway_ports() {
-  local gw
-  gw="$(get_gateway)"
-  run_scan "Gateway open port scan ($gw)" "sudo nmap --stats-every 5s -Pn -T4 --open $gw"
-}
+gateway_scan() {
 
-gateway_fingerprint() {
-  local gw
-  gw="$(get_gateway)"
-  run_scan "Gateway fingerprint ($gw)" "sudo nmap --stats-every 5s -Pn -A -T4 --top-ports 100 $gw"
+local gw
+gw=$(get_gateway)
+
+echo
+echo "Running gateway port scan..."
+echo
+
+sudo nmap -Pn -T4 --open "$gw"
+
+echo
+echo "Running gateway fingerprint scan..."
+echo
+
+sudo nmap -Pn -A -T4 --top-ports 100 "$gw"
+
 }
 
 rogue_dhcp() {
   run_dhcp_discover_scan
   print_alert "Review DHCP offers above. Unexpected DHCP responders should be treated as rogue."
-}
-
-network_map() {
-  local net
-  net="$(get_network)"
-  run_scan "Network map" "sudo nmap -sn $net"
 }
 
 find_web_interfaces() {
@@ -538,12 +539,10 @@ echo "    LSS macOS Network Tools"
 echo "================================="
 
 echo "1) Interface Network Info"
-echo "2) Gateway Port Scan"
-echo "3) Gateway Fingerprint"
-echo "4) Rogue DHCP Detection"
-echo "5) Network Map"
-echo "6) Find Web Admin Interfaces"
-echo "7) Internet Speed Test"
+echo "2) Gateway Scan"
+echo "3) Rogue DHCP Detection"
+echo "4) Find Web Admin Interfaces"
+echo "5) Internet Speed Test"
 
 echo
 echo "0) Exit"
@@ -564,12 +563,10 @@ main() {
 
     case "$opt" in
       1) interface_info ;;
-      2) gateway_ports ;;
-      3) gateway_fingerprint ;;
-      4) rogue_dhcp ;;
-      5) network_map ;;
-      6) find_web_interfaces ;;
-      7) speed_test ;;
+      2) gateway_scan ;;
+      3) rogue_dhcp ;;
+      4) find_web_interfaces ;;
+      5) speed_test ;;
       0) exit 0 ;;
       *) print_warn "Invalid option." ;;
     esac
