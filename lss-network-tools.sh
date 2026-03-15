@@ -920,6 +920,243 @@ gateway_details() {
   echo "Saved JSON: $OUTPUT_DIR/gateway-scan.json"
 }
 
+extract_ping_summary_line() {
+  local file="$1"
+  awk '/(round-trip|min\/avg\/max)/ && /stddev|mdev/ { line=$0 } END { print line }' "$file"
+}
+
+extract_ping_loss_percent() {
+  local file="$1"
+  awk -F',' '/packet loss/ {
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
+    gsub(/% packet loss/, "", $3)
+    print $3
+    exit
+  }' "$file"
+}
+
+parse_ping_metric() {
+  local summary_line="$1"
+  local metric_index="$2"
+  echo "$summary_line" | awk -F'=' '{print $2}' | awk -F'/' -v idx="$metric_index" '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $idx); print $idx}'
+}
+
+gateway_stress_test() {
+  local interface_info_file
+  local gateway
+  local iface
+  local baseline_file jitter_file large_file sustained_file recovery_file
+  local baseline_summary jitter_summary large_summary sustained_summary recovery_summary
+  local baseline_avg baseline_max baseline_stddev
+  local jitter_stddev jitter_max jitter_loss
+  local large_avg large_max large_loss
+  local sustained_avg sustained_max sustained_loss
+  local recovery_avg
+  local high_jitter=false
+  local latency_under_load=false
+  local packet_loss=false
+  local slow_recovery=false
+  local returned_to_baseline=false
+  local json_file
+
+  if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
+    echo
+    echo "Gateway Stress Test"
+  fi
+
+  echo "Stage 1: Running Interface Network Info..."
+  interface_info "$SELECTED_INTERFACE"
+
+  interface_info_file="$OUTPUT_DIR/interface-network-info.json"
+  if [[ ! -f "$interface_info_file" ]]; then
+    interface_info_file="$OUTPUT_DIR/interface-info.json"
+  fi
+
+  if [[ ! -f "$interface_info_file" ]]; then
+    echo "Gateway could not be detected."
+    return 1
+  fi
+
+  gateway="$(jq -r '.gateway // empty' "$interface_info_file")"
+  iface="$(jq -r '.interface // empty' "$interface_info_file")"
+
+  if [[ -z "$gateway" && -n "$iface" ]]; then
+    gateway="$(get_gateway_ip "$iface")"
+  fi
+
+  if [[ -z "$gateway" || "$gateway" == "null" ]]; then
+    echo "Gateway could not be detected."
+    return 1
+  fi
+
+  [[ -z "$iface" || "$iface" == "null" ]] && iface="$SELECTED_INTERFACE"
+
+  echo "Done."
+  echo "Gateway: $gateway"
+  echo "Interface: $iface"
+  echo
+
+  baseline_file="$(mktemp)"
+  jitter_file="$(mktemp)"
+  large_file="$(mktemp)"
+  sustained_file="$(mktemp)"
+  recovery_file="$(mktemp)"
+
+  echo "Stage 2: Baseline latency test (20 pings)..."
+  ping -c 20 "$gateway" > "$baseline_file" 2>&1 &
+  spinner
+  wait
+
+  echo "Stage 3: Jitter test (200 pings @ 0.05s interval)..."
+  ping -i 0.05 -c 200 "$gateway" > "$jitter_file" 2>&1 &
+  spinner
+  wait
+
+  echo "Stage 4: Large packet test (100 pings @ 1400 bytes)..."
+  ping -s 1400 -c 100 "$gateway" > "$large_file" 2>&1 &
+  spinner
+  wait
+
+  echo "Stage 5: Sustained load test (300 pings @ 0.02s interval)..."
+  ping -i 0.02 -c 300 "$gateway" > "$sustained_file" 2>&1 &
+  spinner
+  wait
+
+  echo "Stage 6: Recovery test (30 pings)..."
+  ping -c 30 "$gateway" > "$recovery_file" 2>&1 &
+  spinner
+  wait
+
+  baseline_summary="$(extract_ping_summary_line "$baseline_file")"
+  jitter_summary="$(extract_ping_summary_line "$jitter_file")"
+  large_summary="$(extract_ping_summary_line "$large_file")"
+  sustained_summary="$(extract_ping_summary_line "$sustained_file")"
+  recovery_summary="$(extract_ping_summary_line "$recovery_file")"
+
+  baseline_avg="$(parse_ping_metric "$baseline_summary" 2)"
+  baseline_max="$(parse_ping_metric "$baseline_summary" 3)"
+  baseline_stddev="$(parse_ping_metric "$baseline_summary" 4)"
+
+  jitter_stddev="$(parse_ping_metric "$jitter_summary" 4)"
+  jitter_max="$(parse_ping_metric "$jitter_summary" 3)"
+  jitter_loss="$(extract_ping_loss_percent "$jitter_file")"
+
+  large_avg="$(parse_ping_metric "$large_summary" 2)"
+  large_max="$(parse_ping_metric "$large_summary" 3)"
+  large_loss="$(extract_ping_loss_percent "$large_file")"
+
+  sustained_avg="$(parse_ping_metric "$sustained_summary" 2)"
+  sustained_max="$(parse_ping_metric "$sustained_summary" 3)"
+  sustained_loss="$(extract_ping_loss_percent "$sustained_file")"
+
+  recovery_avg="$(parse_ping_metric "$recovery_summary" 2)"
+
+  [[ -z "$baseline_avg" ]] && baseline_avg="0"
+  [[ -z "$baseline_max" ]] && baseline_max="0"
+  [[ -z "$baseline_stddev" ]] && baseline_stddev="0"
+  [[ -z "$jitter_stddev" ]] && jitter_stddev="0"
+  [[ -z "$jitter_max" ]] && jitter_max="0"
+  [[ -z "$jitter_loss" ]] && jitter_loss="0"
+  [[ -z "$large_avg" ]] && large_avg="0"
+  [[ -z "$large_max" ]] && large_max="0"
+  [[ -z "$large_loss" ]] && large_loss="0"
+  [[ -z "$sustained_avg" ]] && sustained_avg="0"
+  [[ -z "$sustained_max" ]] && sustained_max="0"
+  [[ -z "$sustained_loss" ]] && sustained_loss="0"
+  [[ -z "$recovery_avg" ]] && recovery_avg="0"
+
+  if awk -v s="$jitter_stddev" 'BEGIN { exit !(s > 3) }'; then
+    high_jitter=true
+  fi
+
+  if awk -v load="$sustained_avg" -v base="$baseline_avg" 'BEGIN { if (base <= 0) exit 1; exit !(load > (base * 5)) }'; then
+    latency_under_load=true
+  fi
+
+  if awk -v j="$jitter_loss" -v l="$large_loss" -v s="$sustained_loss" 'BEGIN { exit !((j > 0) || (l > 0) || (s > 0)) }'; then
+    packet_loss=true
+  fi
+
+  if awk -v r="$recovery_avg" -v b="$baseline_avg" 'BEGIN { if (b <= 0) exit 1; exit !(r > (b * 2)) }'; then
+    slow_recovery=true
+  fi
+
+  if [[ "$slow_recovery" == "false" ]]; then
+    returned_to_baseline=true
+  fi
+
+  json_file="$OUTPUT_DIR/gateway-stress-test.json"
+  {
+    echo "{"
+    echo "  \"function\": \"gateway_stress_test\"," 
+    echo "  \"gateway\": \"$gateway\"," 
+    echo "  \"interface\": \"$iface\"," 
+    echo "  \"baseline\": {"
+    echo "    \"avg_latency_ms\": $baseline_avg,"
+    echo "    \"max_latency_ms\": $baseline_max,"
+    echo "    \"stddev_ms\": $baseline_stddev"
+    echo "  },"
+    echo "  \"jitter_test\": {"
+    echo "    \"stddev_ms\": $jitter_stddev,"
+    echo "    \"max_latency_ms\": $jitter_max,"
+    echo "    \"packet_loss_percent\": $jitter_loss"
+    echo "  },"
+    echo "  \"large_packet_test\": {"
+    echo "    \"avg_latency_ms\": $large_avg,"
+    echo "    \"max_latency_ms\": $large_max,"
+    echo "    \"packet_loss_percent\": $large_loss"
+    echo "  },"
+    echo "  \"sustained_test\": {"
+    echo "    \"avg_latency_ms\": $sustained_avg,"
+    echo "    \"max_latency_ms\": $sustained_max,"
+    echo "    \"packet_loss_percent\": $sustained_loss"
+    echo "  },"
+    echo "  \"recovery\": {"
+    echo "    \"avg_latency_ms\": $recovery_avg,"
+    echo "    \"returned_to_baseline\": $returned_to_baseline"
+    echo "  },"
+    echo "  \"indicators\": {"
+    echo "    \"high_jitter\": $high_jitter,"
+    echo "    \"latency_under_load\": $latency_under_load,"
+    echo "    \"packet_loss\": $packet_loss,"
+    echo "    \"slow_recovery\": $slow_recovery"
+    echo "  }"
+    echo "}"
+  } > "$json_file"
+
+  rm -f "$baseline_file" "$jitter_file" "$large_file" "$sustained_file" "$recovery_file"
+
+  echo
+  echo "Baseline Latency"
+  echo "Average: $baseline_avg ms"
+  echo "Max: $baseline_max ms"
+  echo "StdDev: $baseline_stddev ms"
+  echo
+  echo "Jitter Test"
+  echo "StdDev: $jitter_stddev ms"
+  echo "Max: $jitter_max ms"
+  echo "Packet Loss: $jitter_loss%"
+  echo
+  echo "Large Packet Test"
+  echo "Average: $large_avg ms"
+  echo "Max: $large_max ms"
+  echo "Packet Loss: $large_loss%"
+  echo
+  echo "Sustained Load Test"
+  echo "Average: $sustained_avg ms"
+  echo "Max: $sustained_max ms"
+  echo "Packet Loss: $sustained_loss%"
+  echo
+  echo "Recovery"
+  if [[ "$returned_to_baseline" == "true" ]]; then
+    echo "Gateway returned to baseline: YES"
+  else
+    echo "Gateway returned to baseline: NO"
+  fi
+  echo
+  echo "Saved JSON: $json_file"
+}
+
 dhcp_network_scan() {
   local servers=()
   local unique_servers=()
@@ -1108,6 +1345,32 @@ render_gateway_report() {
   } >> "$report_file"
 }
 
+render_gateway_stress_report() {
+  local file="$1"
+  local report_file="$2"
+  local gateway iface baseline_avg sustained_avg high_jitter latency_under_load packet_loss slow_recovery
+
+  gateway="$(jq -r '.gateway // "unknown"' "$file" 2>/dev/null)"
+  iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
+  baseline_avg="$(jq -r '.baseline.avg_latency_ms // "unavailable"' "$file" 2>/dev/null)"
+  sustained_avg="$(jq -r '.sustained_test.avg_latency_ms // "unavailable"' "$file" 2>/dev/null)"
+  high_jitter="$(jq -r '.indicators.high_jitter // false' "$file" 2>/dev/null)"
+  latency_under_load="$(jq -r '.indicators.latency_under_load // false' "$file" 2>/dev/null)"
+  packet_loss="$(jq -r '.indicators.packet_loss // false' "$file" 2>/dev/null)"
+  slow_recovery="$(jq -r '.indicators.slow_recovery // false' "$file" 2>/dev/null)"
+
+  {
+    echo "Gateway IP: ${gateway}"
+    echo "Interface: ${iface}"
+    echo "Baseline Avg Latency: ${baseline_avg} ms"
+    echo "Sustained Avg Latency: ${sustained_avg} ms"
+    echo "High Jitter: ${high_jitter}"
+    echo "Latency Under Load: ${latency_under_load}"
+    echo "Packet Loss Detected: ${packet_loss}"
+    echo "Slow Recovery: ${slow_recovery}"
+  } >> "$report_file"
+}
+
 render_dhcp_report() {
   local file="$1"
   local report_file="$2"
@@ -1191,6 +1454,7 @@ get_task_ids() {
 6|LDAP/AD Network Scan|ldap-ad-scan.json
 7|SMB/NFS Network Scan|smb-nfs-scan.json
 8|Printer/Print Server Network Scan|print-server-scan.json
+9|Gateway Stress Test|gateway-stress-test.json
 TASKS
 }
 
@@ -1211,6 +1475,7 @@ task_title() {
 6|LDAP/AD Network Scan|ldap-ad-scan.json
 7|SMB/NFS Network Scan|smb-nfs-scan.json
 8|Printer/Print Server Network Scan|print-server-scan.json
+9|Gateway Stress Test|gateway-stress-test.json
 TASKS
 }
 
@@ -1225,6 +1490,7 @@ task_output_file() {
 6|LDAP/AD Network Scan|ldap-ad-scan.json
 7|SMB/NFS Network Scan|smb-nfs-scan.json
 8|Printer/Print Server Network Scan|print-server-scan.json
+9|Gateway Stress Test|gateway-stress-test.json
 TASKS
 }
 
@@ -1248,6 +1514,7 @@ run_task_by_id() {
     6) detect_ldap_servers ;;
     7) detect_smb_nfs_servers ;;
     8) detect_print_servers ;;
+    9) gateway_stress_test ;;
     *) return 1 ;;
   esac
 }
@@ -1472,6 +1739,7 @@ build_report() {
       6) render_generic_network_scan_report "$file_path" "$report_file" "LDAP/AD" ;;
       7) render_generic_network_scan_report "$file_path" "$report_file" "SMB/NFS" ;;
       8) render_generic_network_scan_report "$file_path" "$report_file" "Printer" ;;
+      9) render_gateway_stress_report "$file_path" "$report_file" ;;
     esac
 
     echo >> "$report_file"
