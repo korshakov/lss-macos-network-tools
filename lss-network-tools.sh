@@ -1313,7 +1313,9 @@ build_report() {
 
   sanitize_for_filename() {
     local value="$1"
-    value="${value,,}"
+    # macOS ships Bash 3.2 by default, which does not support ${var,,}
+    # lowercase expansion. Use tr for portability.
+    value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
     value="$(echo "$value" | sed 's/[^a-z0-9._-]/-/g; s/-\{2,\}/-/g; s/^-//; s/-$//')"
 
     if [[ -z "$value" ]]; then
