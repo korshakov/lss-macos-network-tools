@@ -26,34 +26,48 @@ print_install_hint() {
 
 check_tools() {
   local missing=0
-  local base_tools=(nmap arp route awk sed grep)
+  local red='[0;31m'
+  local green='[0;32m'
+  local reset='[0m'
+  local base_tools=(nmap awk sed grep find mktemp sudo)
+  local os_tools=()
+  local tool
 
-  for tool in "${base_tools[@]}"; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-      print_install_hint "$tool"
+  if [[ "$OS" == "macos" ]]; then
+    os_tools=(ipconfig ifconfig route networksetup)
+  else
+    os_tools=(ip)
+  fi
+
+  echo
+  echo "Dependency checklist"
+
+  for tool in "${base_tools[@]}" "${os_tools[@]}"; do
+    if command -v "$tool" >/dev/null 2>&1; then
+      printf "${green}[OK]${reset} %s\n" "$tool"
+    else
+      printf "${red}[MISSING]${reset} %s\n" "$tool"
       missing=1
     fi
   done
 
-  if [[ "$OS" == "macos" ]]; then
-    for tool in ipconfig ifconfig; do
-      if ! command -v "$tool" >/dev/null 2>&1; then
-        print_install_hint "$tool"
-        missing=1
-      fi
-    done
-  else
-    if ! command -v ip >/dev/null 2>&1; then
-      print_install_hint "iproute2"
-      missing=1
-    fi
-    if ! command -v ifconfig >/dev/null 2>&1; then
-      echo "Optional fallback missing: ifconfig"
-      echo "Install with: apt install net-tools"
-    fi
+  if [[ "$OS" == "linux" ]] && ! command -v ifconfig >/dev/null 2>&1; then
+    echo "Optional fallback missing: ifconfig"
+    echo "Install with: apt install net-tools"
   fi
 
   if [[ "$missing" -eq 1 ]]; then
+    echo
+    echo "Missing required dependencies:"
+    for tool in "${base_tools[@]}" "${os_tools[@]}"; do
+      if ! command -v "$tool" >/dev/null 2>&1; then
+        if [[ "$tool" == "ip" ]]; then
+          print_install_hint "iproute2"
+        else
+          print_install_hint "$tool"
+        fi
+      fi
+    done
     echo "Please install missing required tools and rerun."
     exit 1
   fi
@@ -549,9 +563,45 @@ detect_os() {
   esac
 }
 
-mkdir -p "$OUTPUT_DIR"
+check_existing_output_data() {
+  local choice
+
+  if [[ ! -d "$OUTPUT_DIR" ]]; then
+    return
+  fi
+
+  if [[ -z "$(find "$OUTPUT_DIR" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+    return
+  fi
+
+  echo
+  echo "Existing output data found in: $OUTPUT_DIR"
+  echo "1) Continue with new scan (delete all output files and continue)"
+  echo "2) Exit script to backup data"
+
+  while true; do
+    read -r -p "Enter selection: " choice
+    case "$choice" in
+      1)
+        find "$OUTPUT_DIR" -mindepth 1 -delete
+        echo "Previous output deleted. Continuing..."
+        return
+        ;;
+      2)
+        echo "Exiting. Please backup your output data and run the script again."
+        exit 0
+        ;;
+      *)
+        echo "Invalid selection. Enter 1 or 2."
+        ;;
+    esac
+  done
+}
+
 detect_os
-warn_if_not_root
 check_tools
+mkdir -p "$OUTPUT_DIR"
+check_existing_output_data
+warn_if_not_root
 select_interface
 main_menu
