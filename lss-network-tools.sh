@@ -453,8 +453,8 @@ scan_servers_by_ports() {
   done < <(awk '
     /Host: / && /Ports: / {
       ip = ""
-      if (match($0, /Host: ([0-9]+(\.[0-9]+){3})/, m)) {
-        ip = m[1]
+      if (match($0, /Host: [0-9.]+/)) {
+        ip = substr($0, RSTART + 6, RLENGTH - 6)
       }
       if (ip == "") {
         next
@@ -881,6 +881,81 @@ render_generic_network_scan_report() {
   ' "$file" >> "$report_file"
 }
 
+
+get_task_ids() {
+  echo "1 2 3 4 5 6 7"
+}
+
+task_title() {
+  case "$1" in
+    1) echo "Interface Network Info" ;;
+    2) echo "Gateway Details" ;;
+    3) echo "DHCP Network Scan" ;;
+    4) echo "DNS Network Scan" ;;
+    5) echo "LDAP/AD Network Scan" ;;
+    6) echo "SMB/NFS Network Scan" ;;
+    7) echo "Printer/Print Server Network Scan" ;;
+    *) return 1 ;;
+  esac
+}
+
+run_task_exists() {
+  local func_id="$1"
+  for listed_id in $(get_task_ids); do
+    if [[ "$listed_id" == "$func_id" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+run_task_by_id() {
+  case "$1" in
+    1) interface_info "$SELECTED_INTERFACE" ;;
+    2) gateway_details "$SELECTED_INTERFACE" ;;
+    3) dhcp_network_scan ;;
+    4) detect_dns_servers ;;
+    5) detect_ldap_servers ;;
+    6) detect_smb_nfs_servers ;;
+    7) detect_print_servers ;;
+    *) return 1 ;;
+  esac
+}
+
+show_task_start_spinner() {
+  local func_id="$1"
+  local spin='-|/'
+  local i
+
+  printf "Running Function: %s " "$func_id"
+  for i in 1 2 3 4 5 6; do
+    printf "\b%c" "${spin:$((i % 3)):1}"
+    sleep 0.1
+  done
+  printf "\b\n"
+}
+
+run_all_tasks() {
+  local task_ids=()
+  local idx next_idx func_id next_func_id
+
+  read -r -a task_ids <<< "$(get_task_ids)"
+
+  for idx in "${!task_ids[@]}"; do
+    func_id="${task_ids[$idx]}"
+    show_task_start_spinner "$func_id"
+    run_task_by_id "$func_id"
+
+    if (( idx + 1 < ${#task_ids[@]} )); then
+      next_idx=$((idx + 1))
+      next_func_id="${task_ids[$next_idx]}"
+      echo "Finished Function $func_id, Moving on to function $next_func_id"
+    else
+      echo "Finished Function $func_id"
+    fi
+  done
+}
+
 build_report() {
   local json_count
   local report_file
@@ -908,15 +983,17 @@ build_report() {
     echo
   } > "$report_file"
 
-  for func_id in 1 2 3 4 5 6 7; do
+  for func_id in $(get_task_ids); do
+    title="$(task_title "$func_id")"
     case "$func_id" in
-      1) title="Interface Network Info"; file_path="$OUTPUT_DIR/interface-info.json" ;;
-      2) title="Gateway Details"; file_path="$OUTPUT_DIR/gateway-scan.json" ;;
-      3) title="DHCP Network Scan"; file_path="$OUTPUT_DIR/dhcp-scan.json" ;;
-      4) title="DNS Network Scan"; file_path="$OUTPUT_DIR/dns-scan.json" ;;
-      5) title="LDAP/AD Network Scan"; file_path="$OUTPUT_DIR/ldap-ad-scan.json" ;;
-      6) title="SMB/NFS Network Scan"; file_path="$OUTPUT_DIR/smb-nfs-scan.json" ;;
-      7) title="Printer/Print Server Network Scan"; file_path="$OUTPUT_DIR/print-server-scan.json" ;;
+      1) file_path="$OUTPUT_DIR/interface-info.json" ;;
+      2) file_path="$OUTPUT_DIR/gateway-scan.json" ;;
+      3) file_path="$OUTPUT_DIR/dhcp-scan.json" ;;
+      4) file_path="$OUTPUT_DIR/dns-scan.json" ;;
+      5) file_path="$OUTPUT_DIR/ldap-ad-scan.json" ;;
+      6) file_path="$OUTPUT_DIR/smb-nfs-scan.json" ;;
+      7) file_path="$OUTPUT_DIR/print-server-scan.json" ;;
+      *) continue ;;
     esac
 
     if [[ -f "$file_path" ]]; then
@@ -945,15 +1022,17 @@ build_report() {
     echo
   } >> "$report_file"
 
-  for func_id in 1 2 3 4 5 6 7; do
+  for func_id in $(get_task_ids); do
+    title="$(task_title "$func_id")"
     case "$func_id" in
-      1) title="Interface Network Info"; file_path="$OUTPUT_DIR/interface-info.json" ;;
-      2) title="Gateway Details"; file_path="$OUTPUT_DIR/gateway-scan.json" ;;
-      3) title="DHCP Network Scan"; file_path="$OUTPUT_DIR/dhcp-scan.json" ;;
-      4) title="DNS Network Scan"; file_path="$OUTPUT_DIR/dns-scan.json" ;;
-      5) title="LDAP/AD Network Scan"; file_path="$OUTPUT_DIR/ldap-ad-scan.json" ;;
-      6) title="SMB/NFS Network Scan"; file_path="$OUTPUT_DIR/smb-nfs-scan.json" ;;
-      7) title="Printer/Print Server Network Scan"; file_path="$OUTPUT_DIR/print-server-scan.json" ;;
+      1) file_path="$OUTPUT_DIR/interface-info.json" ;;
+      2) file_path="$OUTPUT_DIR/gateway-scan.json" ;;
+      3) file_path="$OUTPUT_DIR/dhcp-scan.json" ;;
+      4) file_path="$OUTPUT_DIR/dns-scan.json" ;;
+      5) file_path="$OUTPUT_DIR/ldap-ad-scan.json" ;;
+      6) file_path="$OUTPUT_DIR/smb-nfs-scan.json" ;;
+      7) file_path="$OUTPUT_DIR/print-server-scan.json" ;;
+      *) continue ;;
     esac
 
     {
@@ -986,32 +1065,40 @@ build_report() {
 
 main_menu() {
   local choice
+  local task_ids=()
+  local func_id
+  local title
+
+  read -r -a task_ids <<< "$(get_task_ids)"
+
   while true; do
     echo
     echo "Selected Interface: $SELECTED_INTERFACE"
-    echo "1) Interface Network Info"
-    echo "2) Gateway Details"
-    echo "3) DHCP Network Scan"
-    echo "4) DNS Network Scan"
-    echo "5) LDAP/AD Network Scan"
-    echo "6) SMB/NFS Network Scan"
-    echo "7) Printer/Print Server Network Scan"
+
+    for func_id in "${task_ids[@]}"; do
+      title="$(task_title "$func_id")"
+      if [[ -n "$title" ]]; then
+        echo "$func_id) $title"
+      fi
+    done
+
+    echo "000) Run all tasks (This may take a long time.)"
     echo "00) Build Report"
     echo "0) Exit"
 
     read -r -p "Enter selection: " choice
 
     case "$choice" in
-      1) interface_info "$SELECTED_INTERFACE" ;;
-      2) gateway_details "$SELECTED_INTERFACE" ;;
-      3) dhcp_network_scan ;;
-      4) detect_dns_servers ;;
-      5) detect_ldap_servers ;;
-      6) detect_smb_nfs_servers ;;
-      7) detect_print_servers ;;
+      000) run_all_tasks ;;
       00) build_report ;;
       0) exit 0 ;;
-      *) echo "Invalid selection. Try again." ;;
+      *)
+        if [[ "$choice" =~ ^[0-9]+$ ]] && run_task_exists "$choice"; then
+          run_task_by_id "$choice"
+        else
+          echo "Invalid selection. Try again."
+        fi
+        ;;
     esac
   done
 }
