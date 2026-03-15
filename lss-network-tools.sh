@@ -40,7 +40,7 @@ check_tools() {
   local red='[0;31m'
   local green='[0;32m'
   local reset='[0m'
-  local base_tools=(nmap awk sed grep find mktemp sudo)
+  local base_tools=(nmap awk sed grep find mktemp sudo jq speedtest-cli)
   local os_tools=()
   local missing_tools=()
   local tool
@@ -72,15 +72,6 @@ check_tools() {
   if [[ "$OS" == "linux" ]] && ! command -v ifconfig >/dev/null 2>&1; then
     echo "Optional fallback missing: ifconfig"
     echo "Install with: apt install net-tools"
-  fi
-
-  if ! command -v speedtest >/dev/null 2>&1; then
-    echo "Optional tool missing: speedtest"
-    if [[ "$OS" == "macos" ]]; then
-      echo "Install with: brew install speedtest"
-    else
-      echo "Install with: apt install speedtest-cli"
-    fi
   fi
 
   if [[ "$missing" -eq 1 ]]; then
@@ -710,12 +701,12 @@ render_speed_test_report() {
   local report_file="$2"
   local server location download upload public_ip ping
 
-  public_ip="$(jq -r '.interface.externalIp // "unknown"' "$file" 2>/dev/null)"
+  public_ip="$(jq -r '.client.ip // "unknown"' "$file" 2>/dev/null)"
   server="$(jq -r '.server.name // "unknown"' "$file" 2>/dev/null)"
   location="$(jq -r '.server.location // empty' "$file" 2>/dev/null)"
-  ping="$(jq -r 'if .ping.latency then (.ping.latency|tostring) else "unavailable" end' "$file" 2>/dev/null)"
-  download="$(jq -r 'if .download.bandwidth then (.download.bandwidth / 125000) else empty end' "$file" 2>/dev/null | awk '{printf "%.2f Mbps", $1}')"
-  upload="$(jq -r 'if .upload.bandwidth then (.upload.bandwidth / 125000) else empty end' "$file" 2>/dev/null | awk '{printf "%.2f Mbps", $1}')"
+  ping="$(jq -r '.ping // "unavailable"' "$file" 2>/dev/null)"
+  download="$(jq -r 'if .download then (.download / 1000000) else empty end' "$file" 2>/dev/null | awk '{printf "%.2f Mbps", $1}')"
+  upload="$(jq -r 'if .upload then (.upload / 1000000) else empty end' "$file" 2>/dev/null | awk '{printf "%.2f Mbps", $1}')"
 
   if [[ -n "$location" ]]; then
     server="$server ($location)"
@@ -746,8 +737,8 @@ internet_speed_test() {
     echo "=============================="
   fi
 
-  if ! command -v speedtest >/dev/null 2>&1; then
-    echo "Speedtest CLI not found."
+  if ! command -v speedtest-cli >/dev/null 2>&1; then
+    echo "speedtest-cli not installed."
     echo
     echo "Install instructions:"
     echo
@@ -767,7 +758,7 @@ internet_speed_test() {
   fi
 
   result_file="$(mktemp)"
-  speedtest --accept-license --accept-gdpr --format=json > "$result_file" 2>&1 &
+  speedtest-cli --secure --json > "$result_file" 2>&1 &
   pid=$!
   run_with_stage_spinner "$pid" "$timeout_seconds"
   exit_code=$?
@@ -786,12 +777,12 @@ internet_speed_test() {
     return 1
   fi
 
-  public_ip="$(echo "$result" | jq -r '.interface.externalIp // "unknown"')"
+  public_ip="$(echo "$result" | jq -r '.client.ip // "unknown"')"
   server_name="$(echo "$result" | jq -r '.server.name // "unknown"')"
   server_location="$(echo "$result" | jq -r '.server.location // ""')"
-  ping_latency="$(echo "$result" | jq -r '.ping.latency // "unavailable"' | awk '{if ($1=="unavailable") print $1; else printf "%.0f", $1}')"
-  download_speed="$(echo "$result" | jq -r 'if .download.bandwidth then (.download.bandwidth / 125000) else empty end' | awk '{printf "%.2f", $1}')"
-  upload_speed="$(echo "$result" | jq -r 'if .upload.bandwidth then (.upload.bandwidth / 125000) else empty end' | awk '{printf "%.2f", $1}')"
+  ping_latency="$(echo "$result" | jq -r '.ping // "unavailable"' | awk '{if ($1=="unavailable") print $1; else printf "%.2f", $1}')"
+  download_speed="$(echo "$result" | jq -r 'if .download then (.download / 1000000) else empty end' | awk '{printf "%.2f", $1}')"
+  upload_speed="$(echo "$result" | jq -r 'if .upload then (.upload / 1000000) else empty end' | awk '{printf "%.2f", $1}')"
 
   [[ -z "$download_speed" ]] && download_speed="unavailable"
   [[ -z "$upload_speed" ]] && upload_speed="unavailable"

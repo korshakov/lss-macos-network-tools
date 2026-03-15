@@ -126,32 +126,44 @@ install_required_tools() {
   fi
 }
 
-install_optional_tools() {
-  if command -v speedtest >/dev/null 2>&1; then
-    log "[OK] speedtest"
+install_speedtest_cli() {
+  if command -v speedtest-cli >/dev/null 2>&1; then
+    log "[OK] speedtest-cli"
     return
   fi
 
-  log "Installing optional speedtest tool"
-  if brew info --formula speedtest >/dev/null 2>&1; then
-    brew install speedtest
-  else
-    brew install speedtest-cli
+  log "Installing speedtest-cli"
+
+  if [[ "$OS" == "macos" ]]; then
+    if command -v brew >/dev/null 2>&1; then
+      brew install speedtest-cli
+    else
+      log "[WARN] Homebrew required to install speedtest-cli"
+      return
+    fi
+  elif [[ "$OS" == "linux" ]]; then
+    if command -v apt >/dev/null 2>&1; then
+      sudo apt update
+      sudo apt install -y speedtest-cli
+    elif command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y speedtest-cli
+    else
+      log "[WARN] No supported package manager found (apt or dnf) for speedtest-cli installation"
+      return
+    fi
   fi
 
-  if command -v speedtest >/dev/null 2>&1; then
-    log "[OK] speedtest"
-  elif command -v speedtest-cli >/dev/null 2>&1; then
-    log "[WARN] speedtest command not available, but speedtest-cli is installed"
+  if command -v speedtest-cli >/dev/null 2>&1; then
+    log "[OK] speedtest-cli"
   else
-    log "[WARN] speedtest installation did not provide a runnable command"
+    log "[WARN] speedtest-cli is still missing after installation attempt"
   fi
 }
 
 detect_os
 install_homebrew
 install_required_tools
-install_optional_tools
+install_speedtest_cli
 
 mkdir -p "$SCRIPT_DIR/output"
 chmod +x "$SCRIPT_DIR/lss-network-tools.sh"
