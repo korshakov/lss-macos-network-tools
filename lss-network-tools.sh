@@ -459,8 +459,7 @@ dhcp_network_scan() {
     server="${unique_servers[$idx]}"
 
     echo
-    echo "Server $((idx + 1)): $server"
-    echo "Scanning all ports (this may take up to 1 minute)..."
+    echo "Scanning all ports on Server $((idx + 1)) (this may take up to 1 minute)..."
 
     dhcp_scan_file="$(mktemp)"
     nmap -p- --open "$server" -oG - > "$dhcp_scan_file" 2>/dev/null &
